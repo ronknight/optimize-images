@@ -1,3 +1,8 @@
+input/
+output/
+testinput/
+testoutput/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -169,3 +174,4 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+input/April/Laptop - God is Worthy - APR.jpg
