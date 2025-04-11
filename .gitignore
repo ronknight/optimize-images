@@ -174,4 +174,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-input/April/Laptop - God is Worthy - APR.jpg
+*.png
+*.jpg
