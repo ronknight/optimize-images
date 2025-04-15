@@ -3,6 +3,7 @@ import io
 import tinify
 from PIL import Image
 from dotenv import load_dotenv
+from log_handler import CompressionLogger
 
 # Load environment variables from .env file
 load_dotenv()
@@ -15,6 +16,9 @@ if not TINIFY_API_KEY:
 
 # Set the API key for tinify
 tinify.key = TINIFY_API_KEY
+
+# Initialize the compression logger
+logger = CompressionLogger()
 def is_image_file(filename):
     """
     Check if a file is an image based on its extension.
@@ -74,6 +78,9 @@ def compress_images(input_folder, output_folder):
     Recursively find and compress images from input_folder,
     then save them to output_folder, preserving subdirectories.
     """
+    total_processed = 0
+    total_successful = 0
+    
     for root, dirs, files in os.walk(input_folder):
         for file in files:
             if is_image_file(file):
@@ -89,29 +96,65 @@ def compress_images(input_folder, output_folder):
                 os.makedirs(dest_dir, exist_ok=True)
 
                 print(f"Compressing: {src_path} -> {dest_path}")
-
+                total_processed += 1
+                
                 try:
+                    # Get original file size
+                    original_size = os.path.getsize(src_path)
+                    
                     # 1) First do a lossless in-memory compression
                     precompressed_data = lossless_compress_in_memory(src_path)
 
                     # 2) Then pass that data to Tinify
                     source = tinify.from_buffer(precompressed_data)
                     source.to_file(dest_path)
+                    
+                    # Get compressed file size
+                    compressed_size = os.path.getsize(dest_path)
+                    
+                    # Log the successful compression
+                    log_result = logger.log_compression(
+                        filename=relative_path,
+                        original_size=original_size,
+                        compressed_size=compressed_size
+                    )
+                    
+                    # Print compression results
+                    savings_pct = log_result['savings']
+                    print(f"Compressed {relative_path}: {log_result['original_size']:.2f}KB → {log_result['compressed_size']:.2f}KB ({savings_pct:.2f}% saved)")
+                    
+                    total_successful += 1
 
                 except tinify.errors.AccountError as e:
-                    print(f"Account Error: {e.message}")
+                    error_msg = f"Account Error: {e.message}"
+                    print(error_msg)
                     print("Verify your API key and account limits.")
+                    logger.log_error(relative_path, error_msg)
+                    
                 except tinify.errors.ClientError as e:
-                    print(f"Client Error: {e.message}")
+                    error_msg = f"Client Error: {e.message}"
+                    print(error_msg)
                     print("Check source image and request options.")
+                    logger.log_error(relative_path, error_msg)
+                    
                 except tinify.errors.ServerError as e:
-                    print(f"Server Error: {e.message}")
+                    error_msg = f"Server Error: {e.message}"
+                    print(error_msg)
                     print("Temporary issue with the Tinify API.")
+                    logger.log_error(relative_path, error_msg)
+                    
                 except tinify.errors.ConnectionError as e:
-                    print(f"Connection Error: {e.message}")
+                    error_msg = f"Connection Error: {e.message}"
+                    print(error_msg)
                     print("A network connection error occurred.")
+                    logger.log_error(relative_path, error_msg)
+                    
                 except Exception as e:
-                    print(f"An unexpected error occurred: {e}")
+                    error_msg = f"An unexpected error occurred: {e}"
+                    print(error_msg)
+                    logger.log_error(relative_path, error_msg)
+    
+    return total_processed, total_successful
 
 def main():
     # Prompt for input and output folder paths
