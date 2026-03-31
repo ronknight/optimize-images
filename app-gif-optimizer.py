@@ -1,6 +1,5 @@
 import os
 import io
-import re
 import tinify
 from PIL import Image
 from dotenv import load_dotenv
@@ -20,43 +19,6 @@ tinify.key = TINIFY_API_KEY
 
 # Initialize the compression logger
 logger = CompressionLogger()
-
-def parse_dimensions_from_filename(filename):
-    """
-    Extract dimensions from filename. Supports multiple formats:
-    - image_800x600.png
-    - photo-1920x1080.jpg
-    - file.800-600.png
-    - image_800_600.jpg
-    - img(800x600).png
-    - img[800x600].png
-    
-    Returns: tuple (width, height) or None if no dimensions found
-    """
-    # Remove file extension to avoid issues
-    name_without_ext = os.path.splitext(filename)[0]
-    
-    # Pattern to match dimension formats: WIDTHxHEIGHT or WIDTH-HEIGHT or WIDTH_HEIGHT
-    # Supports delimiters: x, X, -, _, within various contexts
-    patterns = [
-        r'[_\-\.\(\[\s](\d{2,5})[xX\-_](\d{2,5})[_\)\]\s]?',  # 800x600, 800-600, 800_600, etc.
-        r'[_\-\.\(\[\s](\d{2,5})[xX\-_](\d{2,5})(?:\D|$)',     # At end or followed by non-digit
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, name_without_ext)
-        if match:
-            try:
-                width = int(match.group(1))
-                height = int(match.group(2))
-                # Validate dimensions are reasonable (between 1 and 16000 pixels)
-                if 1 <= width <= 16000 and 1 <= height <= 16000:
-                    return (width, height)
-            except (ValueError, AttributeError):
-                continue
-    
-    return None
-
 def is_image_file(filename):
     """
     Check if a file is an image based on its extension.
@@ -66,28 +28,17 @@ def is_image_file(filename):
     ext = os.path.splitext(filename)[1].lower()
     return ext in valid_extensions
 
-def lossless_compress_in_memory(src_path, target_dimensions=None):
+def lossless_compress_in_memory(src_path):
     """
-    Open the image with Pillow, optionally resize based on target dimensions,
-    do (mostly) lossless compression in memory, and return the resulting bytes.
-    This helps reduce file size before sending to Tinify.
-    
-    Args:
-        src_path: Path to the source image
-        target_dimensions: Optional tuple (width, height) to resize image to
+    Open the image with Pillow, do (mostly) lossless compression in memory,
+    and return the resulting bytes. This helps reduce file size before
+    sending to Tinify.
     """
     # Read the image
     with Image.open(src_path) as img:
         # Pillow identifies format from the file itself, 
         # which can differ from the extension in rare cases.
         img_format = img.format
-
-        # Apply resizing if target dimensions provided
-        if target_dimensions:
-            target_width, target_height = target_dimensions
-            # Use LANCZOS resampling for high-quality resizing
-            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
-            print(f"  Resized to: {target_width}x{target_height}")
 
         # Prepare an in-memory buffer
         buffer = io.BytesIO()
@@ -178,17 +129,18 @@ def compress_images(input_folder, output_folder):
                     # Get original file size
                     original_size = os.path.getsize(src_path)
                     
-                    # Parse dimensions from filename
-                    target_dimensions = parse_dimensions_from_filename(file)
-                    if target_dimensions:
-                        print(f"  Found dimensions in filename: {target_dimensions[0]}x{target_dimensions[1]}")
+                    # Check if the file is a GIF
+                    is_gif = os.path.splitext(file)[1].lower() == ".gif"
                     
-                    # 1) First do a lossless in-memory compression (with optional resizing)
-                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions)
-
-                    # 2) Then pass that data to Tinify
-                    source = tinify.from_buffer(precompressed_data)
-                    source.to_file(dest_path)
+                    if is_gif:
+                        # For GIFs, use only Pillow's optimization
+                        with open(dest_path, 'wb') as f:
+                            f.write(lossless_compress_in_memory(src_path))
+                    else:
+                        # For other formats, use Tinify
+                        precompressed_data = lossless_compress_in_memory(src_path)
+                        source = tinify.from_buffer(precompressed_data)
+                        source.to_file(dest_path)
                     
                     # Get compressed file size
                     compressed_size = os.path.getsize(dest_path)

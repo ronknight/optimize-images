@@ -33,6 +33,9 @@ The **Optimize Images** project is a Python-based CLI tool for compressing image
 - **In-Memory Precompression**: Uses Pillow for initial lossless compression before sending data to TinyPNG API.
 - **Recursive Folder Processing**: Processes all images within a folder, preserving the directory structure in the output folder.
 - **TinyPNG API Integration**: Ensures high-quality lossy compression for reduced image sizes.
+- **WebP Conversion**: Advanced WebP converter with intelligent size detection from filenames.
+- **SVG to PNG Conversion**: Converts `.svg` assets to `.png` while preserving folder structure.
+- **Automatic Resize**: Resizes images while maintaining aspect ratio and centering.
 - **Error Handling**: Robust error management for account issues, API limits, and network problems.
 
 ---
@@ -61,12 +64,14 @@ The **Optimize Images** project is a Python-based CLI tool for compressing image
 ---
 
 ## 🎯 Usage
+
+### Main Compression Tool
 Run the script to compress your images:
 ```bash
 python optimize_images.py
 ```
 
-### CLI Workflow:
+#### CLI Workflow:
 1. The script will prompt you for the input folder path:
    ```
    Enter the input folder path:
@@ -78,9 +83,84 @@ python optimize_images.py
    ```
 4. The script will then compress all valid images and save the compressed versions to the specified output folder, preserving the folder structure.
 
+### WebP Converter
+Convert images to WebP format with intelligent size detection:
+
+```bash
+python webp_converter.py input_folder output_folder [size] [-q quality] [-k]
+```
+
+#### WebP Converter Arguments:
+- `input_folder`: Path to folder containing images to convert
+- `output_folder`: Path where converted WebP images will be saved
+- `size` (optional): Default target size in format `WIDTHxHEIGHT` (e.g., `800x600`) or `WIDTH` for square (e.g., `800`)
+- `-q, --quality`: WebP quality from 1-100 (default: 80)
+- `-k, --keep-size`: Keep original image dimensions (no resizing)
+
+#### Smart Size Detection:
+The WebP converter can automatically detect target sizes from filenames:
+- `image_800x600.png` → Resizes to 800x600 pixels
+- `photo_400.jpg` → Resizes to 400x400 pixels (square)
+- `banner-1920x1080.webp` → Resizes to 1920x1080 pixels
+
+#### Examples:
+```bash
+# Convert with automatic size detection from filenames
+python webp_converter.py ./input ./output
+
+# Convert keeping original dimensions
+python webp_converter.py ./input ./output -k
+
+# Convert with default size for files without size in filename
+python webp_converter.py ./input ./output 800x600
+
+# Convert with custom quality
+python webp_converter.py ./input ./output 1024 -q 90
+
+# Convert to square format with high quality and keep original dimensions
+python webp_converter.py ./input ./output 512 --quality 95
+
+# Keep original size with high quality
+python webp_converter.py ./input ./output --keep-size --quality 95
+```
+
+### SVG to PNG Converter
+Convert SVG files to PNG while preserving the input folder structure:
+
+```bash
+python svg_to_png_converter.py input_folder output_folder [--width PIXELS] [--height PIXELS] [--scale FACTOR] [--background COLOR]
+```
+
+#### SVG to PNG Converter Arguments:
+- `input_folder`: Path to folder containing SVG files
+- `output_folder`: Path where converted PNG files will be saved
+- `--width`: Optional output width in pixels
+- `--height`: Optional output height in pixels
+- `--scale`: Optional scale factor for rendering (default: `1.0`)
+- `--background`: Optional background color such as `white` or `#ffffff`
+
+The converter uses `magick` from ImageMagick when it is available on your system. If ImageMagick is not installed, it falls back to `cairosvg` when that package and its native Cairo runtime are available.
+
+#### Examples:
+```bash
+# Convert all SVG files using their intrinsic document size
+python svg_to_png_converter.py ./logo ./optimize-logo
+
+# Render larger PNGs with a 2x scale factor
+python svg_to_png_converter.py ./logo ./optimize-logo --scale 2
+
+# Force a specific output size
+python svg_to_png_converter.py ./logo ./optimize-logo --width 1200 --height 400
+
+# Render onto a solid white background
+python svg_to_png_converter.py ./logo ./optimize-logo --background white
+```
+
 ---
 
 ## 🛠️ How It Works
+
+### Main Compression Tool:
 1. **Image File Validation**:
    - The script checks file extensions (`.png`, `.jpg`, `.jpeg`, `.webp`) to determine if a file is an image.
 2. **In-Memory Compression**:
@@ -90,16 +170,51 @@ python optimize_images.py
 4. **Output Handling**:
    - Compressed images are saved in the specified output folder, retaining the original folder structure.
 
+### WebP Converter:
+1. **Format Detection**:
+   - Supports multiple input formats: `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.tiff`.
+2. **Intelligent Size Extraction**:
+   - Automatically detects target dimensions from filename patterns (e.g., `image_800x600.png`).
+   - Falls back to default size if no dimensions found in filename.
+3. **Smart Resizing**:
+   - Maintains aspect ratio during resize using high-quality Lanczos resampling.
+   - Centers resized image within target dimensions.
+   - Handles transparency (RGBA) and fills background appropriately.
+4. **WebP Optimization**:
+   - Converts to efficient WebP format with configurable quality settings.
+   - Uses method 6 for optimal compression/quality balance.
+5. **Logging**:
+   - Tracks compression statistics and file size savings.
+   - Logs errors for problematic files.
+
+### SVG to PNG Converter:
+1. **SVG Discovery**:
+   - Recursively finds `.svg` files in the input folder.
+2. **Raster Rendering**:
+   - Uses CairoSVG to render vector assets into `.png` files.
+3. **Optional Output Controls**:
+   - Supports explicit width/height, render scale, and background color.
+4. **Output Handling**:
+   - Writes `.png` files to the output folder while preserving subdirectories.
+
 ---
 
 ## 📂 Folder Structure
 ```
 optimize-images/
 │
-├── .env                # Environment variables (TinyPNG API key)
-├── optimize_images.py  # Main script
-├── requirements.txt    # Python dependencies
-├── README.md           # Project documentation
+├── .env                      # Environment variables (TinyPNG API key)
+├── app.py                    # Main application script
+├── main.py                   # Entry point
+├── process.py                # Image processing logic
+├── webp_converter.py         # WebP conversion tool with smart sizing
+├── resize_and_optimize.py    # Image resize and optimization utilities
+├── log_handler.py            # Compression logging system
+├── requirements.txt          # Python dependencies
+├── README.md                 # Project documentation
+├── logs/                     # Compression logs directory
+├── original/                 # Input images folder
+└── optimized/                # Output images folder
 ```
 
 ---
