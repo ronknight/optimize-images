@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 set "IMAGEMAGICK_PATH=C:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe"
-set "INPUT_DIR=input1"
+set "INPUT_DIR=input"
 set "OUTPUT_DIR=optimized"
 
 if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"

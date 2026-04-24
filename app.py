@@ -100,7 +100,7 @@ def is_image_file(filename):
     ext = os.path.splitext(filename)[1].lower()
     return ext in valid_extensions
 
-def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None):
+def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None):
     """
     Open the image with Pillow, optionally resize based on target dimensions,
     do (mostly) lossless compression in memory, and return the resulting bytes.
@@ -110,12 +110,30 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         src_path: Path to the source image
         target_dimensions: Optional tuple (width, height) to resize image to
         target_dpi: Optional DPI value to set for the image
+        convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
     """
+    # Map of common format names to Pillow format strings
+    FORMAT_MAP = {
+        'png': 'PNG',
+        'jpg': 'JPEG',
+        'jpeg': 'JPEG',
+        'webp': 'WEBP',
+        'gif': 'GIF',
+    }
+
     # Read the image
     with Image.open(src_path) as img:
         # Pillow identifies format from the file itself, 
         # which can differ from the extension in rare cases.
         img_format = img.format
+
+        # Override format if conversion requested
+        if convert_to:
+            img_format = FORMAT_MAP.get(convert_to.lower(), convert_to.upper())
+            # Converting to a non-RGBA format from RGBA (e.g., PNG->JPEG) needs mode conversion
+            if img_format == 'JPEG' and img.mode in ('RGBA', 'P', 'LA'):
+                img = img.convert('RGB')
+            # Converting to PNG/WEBP from non-alpha mode is fine as-is
 
         # Apply resizing if target dimensions provided
         if target_dimensions:
@@ -205,7 +223,7 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         # Get the compressed bytes
         return buffer.getvalue()
 
-def compress_images(input_folder, output_folder, target_size=None, target_dpi=None):
+def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None):
     """
     Recursively find and compress images from input_folder,
     then save them to output_folder, preserving subdirectories.
@@ -215,6 +233,7 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
         output_folder: Path to output folder for compressed images
         target_size: Optional tuple (width, height) to resize all images to
         target_dpi: Optional DPI value to set for all images
+        convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
     """
     total_processed = 0
     total_successful = 0
@@ -230,6 +249,13 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
 
                 # Create the corresponding subfolder under output_folder
                 dest_path = os.path.join(output_folder, relative_path)
+                
+                # Change file extension if converting format
+                if convert_to:
+                    ext_map = {'png': '.png', 'jpg': '.jpg', 'jpeg': '.jpg', 'webp': '.webp', 'gif': '.gif'}
+                    new_ext = ext_map.get(convert_to.lower(), '.' + convert_to.lower())
+                    dest_path = os.path.splitext(dest_path)[0] + new_ext
+                
                 dest_dir = os.path.dirname(dest_path)
                 os.makedirs(dest_dir, exist_ok=True)
 
@@ -264,8 +290,8 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                     if target_dimensions:
                         print(f"  Target dimensions: {target_dimensions[0]}x{target_dimensions[1]} (from {dimension_source})")
                     
-                    # 1) First do a lossless in-memory compression (with optional resizing and DPI)
-                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi)
+                    # 1) First do a lossless in-memory compression (with optional resizing, DPI, and format conversion)
+                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to)
 
                     # 2) Then pass that data to Tinify
                     source = tinify.from_buffer(precompressed_data)
@@ -345,6 +371,7 @@ def main():
     parser.add_argument('output_folder', nargs='?', help='Output folder for compressed images')
     parser.add_argument('--size', '-s', help='Target size in format WIDTHxHEIGHT (e.g., 800x600)')
     parser.add_argument('--dpi', '-d', type=int, help='Target DPI for images (e.g., 72, 300)')
+    parser.add_argument('--convert-to', '-c', choices=['png', 'jpg', 'jpeg', 'webp', 'gif'], help='Convert images to target format (e.g., png, jpg, webp)')
     parser.add_argument('--width', '-w', type=int, help='Target width in pixels')
     parser.add_argument('--height', type=int, help='Target height in pixels')
     
@@ -388,6 +415,8 @@ def main():
         print("Target size: Auto-detect from subfolders/filenames")
     if target_dpi:
         print(f"Target DPI: {target_dpi}")
+    if args.convert_to:
+        print(f"Convert to: {args.convert_to.upper()}")
     print("Size detection priority: Command line > Subfolder name > Filename")
     print("-" * 50)
     
@@ -395,7 +424,7 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
     
     # Start compression
-    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi)
+    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to)
     print("-" * 50)
     print(f"Image compression process completed.")
     print(f"Files processed: {total_processed}")
