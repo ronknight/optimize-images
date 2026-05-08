@@ -39,12 +39,19 @@ def parse_dimensions_from_text(text):
     # Remove file extension to avoid issues
     text_clean = os.path.splitext(text)[0]
     
+    # Exclude date patterns (YYYY-MM-DD, MM-DD, YYYYMMDD, etc.)
+    # This prevents "2026-05-08" or "05-08" from being parsed as dimensions
+    if re.search(r'\d{4}[-_]\d{2}[-_]\d{2}|\d{2}[-_]\d{2}(?:[-_]\d{2,4})?', text_clean):
+        return None
+    
     # Pattern to match dimension formats: WIDTHxHEIGHT or WIDTH-HEIGHT or WIDTH_HEIGHT
     # Supports delimiters: x, X, -, _, within various contexts
+    # Prioritize 'x' or 'X' over '-' or '_' to avoid date-like patterns
     patterns = [
-        r'^(\d{2,5})[xX\-_](\d{2,5})$',                        # Exact match for folder names like "1518x1518"
-        r'[_\-\.\(\[\s](\d{2,5})[xX\-_](\d{2,5})[_\)\]\s]?',  # 800x600, 800-600, 800_600, etc.
-        r'[_\-\.\(\[\s](\d{2,5})[xX\-_](\d{2,5})(?:\D|$)',     # At end or followed by non-digit
+        r'^(\d{3,5})[xX](\d{3,5})$',                           # Exact match with 'x': "1518x1518"
+        r'[_\.\(\[\s](\d{3,5})[xX](\d{3,5})[_\)\]\s]?',        # "800x600" with delimiters
+        r'^(\d{3,5})[_\-](\d{3,5})$',                           # Exact match with '-' or '_': "800-600" (min 3 digits each)
+        r'[_\.\(\[\s](\d{3,5})[_\-](\d{3,5})[_\)\]\s]?',       # "800-600" or "800_600" with delimiters
     ]
     
     for pattern in patterns:
@@ -53,8 +60,9 @@ def parse_dimensions_from_text(text):
             try:
                 width = int(match.group(1))
                 height = int(match.group(2))
-                # Validate dimensions are reasonable (between 1 and 16000 pixels)
-                if 1 <= width <= 16000 and 1 <= height <= 16000:
+                # Validate dimensions are reasonable (between 8 and 16000 pixels)
+                # Minimum 8x8 to avoid tiny dimensions from date mismatches
+                if 8 <= width <= 16000 and 8 <= height <= 16000:
                     return (width, height)
             except (ValueError, AttributeError):
                 continue
