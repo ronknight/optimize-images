@@ -49,9 +49,9 @@ def parse_dimensions_from_text(text):
     # Prioritize 'x' or 'X' over '-' or '_' to avoid date-like patterns
     patterns = [
         r'^(\d{3,5})[xX](\d{3,5})$',                           # Exact match with 'x': "1518x1518"
-        r'[_\.\(\[\s](\d{3,5})[xX](\d{3,5})[_\)\]\s]?',        # "800x600" with delimiters
+        r'[_\.\(\[\s\-](\d{3,5})[xX](\d{3,5})[_\)\]\s\-]?',    # "800x600" with delimiters (including hyphen)
         r'^(\d{3,5})[_\-](\d{3,5})$',                           # Exact match with '-' or '_': "800-600" (min 3 digits each)
-        r'[_\.\(\[\s](\d{3,5})[_\-](\d{3,5})[_\)\]\s]?',       # "800-600" or "800_600" with delimiters
+        r'[_\.\(\[\s\-](\d{3,5})[_\-](\d{3,5})[_\)\]\s\-]?',   # "800-600" or "800_600" with delimiters (including hyphen)
     ]
     
     for pattern in patterns:
