@@ -3,7 +3,7 @@ import io
 import re
 import argparse
 import tinify
-from PIL import Image
+from PIL import Image, ImageChops
 from dotenv import load_dotenv
 from log_handler import CompressionLogger
 
@@ -108,7 +108,82 @@ def is_image_file(filename):
     ext = os.path.splitext(filename)[1].lower()
     return ext in valid_extensions
 
-def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None):
+def has_alpha(img):
+    """Return True if the image carries transparency information."""
+    return img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
+
+
+def trim_borders(img):
+    """
+    Remove uniform surrounding whitespace/border from an image so that a logo
+    fills its own bounding box. Uses the alpha channel when present, otherwise
+    the top-left corner pixel as the background color.
+
+    Returns a (possibly) cropped copy of the image.
+    """
+    if has_alpha(img):
+        # Trim based on the transparent region.
+        alpha = img.convert('RGBA').getchannel('A')
+        bbox = alpha.getbbox()
+        if bbox:
+            return img.crop(bbox)
+        return img
+
+    # Trim based on the background color sampled from the top-left corner.
+    bg_color = img.getpixel((0, 0))
+    background = Image.new(img.mode, img.size, bg_color)
+    diff = ImageChops.difference(img.convert(background.mode), background)
+    bbox = diff.getbbox()
+    if bbox:
+        return img.crop(bbox)
+    return img
+
+
+def fit_with_padding(img, target_dimensions, max_upscale=2.0):
+    """
+    Resize an image to fit within target_dimensions while preserving its aspect
+    ratio, then center it on a canvas of exactly target_dimensions (padding with
+    transparency for images with alpha, otherwise white). This avoids the
+    stretching that occurs when forcing an exact width x height.
+
+    Args:
+        img: The source Pillow image.
+        target_dimensions: Tuple (width, height) of the final canvas.
+        max_upscale: Maximum upscale factor. A value of 2.0 means the image is
+            never scaled to more than twice its original size. Pass None to
+            disable the cap.
+
+    Returns: A new image of size target_dimensions.
+    """
+    target_w, target_h = target_dimensions
+    w, h = img.size
+
+    # Scale to fit inside the target box, preserving aspect ratio.
+    scale = min(target_w / w, target_h / h)
+    if max_upscale is not None:
+        scale = min(scale, max_upscale)
+
+    new_w = max(1, round(w * scale))
+    new_h = max(1, round(h * scale))
+    resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    # Build the padded canvas.
+    if has_alpha(img):
+        canvas = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 0))
+        resized = resized.convert('RGBA')
+        offset = ((target_w - new_w) // 2, (target_h - new_h) // 2)
+        canvas.paste(resized, offset, resized)
+    else:
+        canvas = Image.new('RGB', (target_w, target_h), (255, 255, 255))
+        if resized.mode != 'RGB':
+            resized = resized.convert('RGB')
+        offset = ((target_w - new_w) // 2, (target_h - new_h) // 2)
+        canvas.paste(resized, offset)
+
+    return canvas
+
+
+def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True):
     """
     Open the image with Pillow, optionally resize based on target dimensions,
     do (mostly) lossless compression in memory, and return the resulting bytes.
@@ -119,6 +194,8 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         target_dimensions: Optional tuple (width, height) to resize image to
         target_dpi: Optional DPI value to set for the image
         convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
+        max_upscale: Maximum upscale factor when resizing (2.0 = never more than 2x)
+        trim: When True, trim uniform borders/whitespace before resizing
     """
     # Map of common format names to Pillow format strings
     FORMAT_MAP = {
@@ -131,9 +208,14 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
 
     # Read the image
     with Image.open(src_path) as img:
-        # Pillow identifies format from the file itself, 
+        # Pillow identifies format from the file itself,
         # which can differ from the extension in rare cases.
         img_format = img.format
+
+        # Trim surrounding whitespace/border so the subject fills its own
+        # bounding box before any aspect-preserving resize.
+        if trim:
+            img = trim_borders(img)
 
         # Override format if conversion requested
         if convert_to:
@@ -143,12 +225,13 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
                 img = img.convert('RGB')
             # Converting to PNG/WEBP from non-alpha mode is fine as-is
 
-        # Apply resizing if target dimensions provided
+        # Apply resizing if target dimensions provided. Preserve the aspect
+        # ratio (fit + center-pad) instead of stretching, and cap upscaling.
         if target_dimensions:
             target_width, target_height = target_dimensions
-            # Use LANCZOS resampling for high-quality resizing
-            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
-            print(f"  Resized to: {target_width}x{target_height}")
+            img = fit_with_padding(img, target_dimensions, max_upscale=max_upscale)
+            print(f"  Resized to fit {target_width}x{target_height} "
+                  f"(aspect preserved, max upscale {max_upscale}x)")
         
         # Set DPI if specified
         if target_dpi:
@@ -231,7 +314,7 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         # Get the compressed bytes
         return buffer.getvalue()
 
-def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None):
+def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True):
     """
     Recursively find and compress images from input_folder,
     then save them to output_folder, preserving subdirectories.
@@ -299,7 +382,7 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                         print(f"  Target dimensions: {target_dimensions[0]}x{target_dimensions[1]} (from {dimension_source})")
                     
                     # 1) First do a lossless in-memory compression (with optional resizing, DPI, and format conversion)
-                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to)
+                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to, max_upscale, trim)
 
                     # 2) Then pass that data to Tinify
                     source = tinify.from_buffer(precompressed_data)
@@ -382,6 +465,8 @@ def main():
     parser.add_argument('--convert-to', '-c', choices=['png', 'jpg', 'jpeg', 'webp', 'gif'], help='Convert images to target format (e.g., png, jpg, webp)')
     parser.add_argument('--width', '-w', type=int, help='Target width in pixels')
     parser.add_argument('--height', type=int, help='Target height in pixels')
+    parser.add_argument('--max-upscale', type=float, default=2.0, help='Maximum upscale factor when resizing (default: 2.0; 1.0 = never enlarge)')
+    parser.add_argument('--no-trim', dest='trim', action='store_false', help='Disable trimming of surrounding whitespace/border before resizing')
     
     args = parser.parse_args()
     
@@ -421,6 +506,8 @@ def main():
         print(f"Target size: {target_size[0]}x{target_size[1]} (command line override)")
     else:
         print("Target size: Auto-detect from subfolders/filenames")
+    print(f"Resize mode: fit + center-pad (aspect preserved), max upscale {args.max_upscale}x")
+    print(f"Trim borders: {'enabled' if args.trim else 'disabled'}")
     if target_dpi:
         print(f"Target DPI: {target_dpi}")
     if args.convert_to:
@@ -432,7 +519,7 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
     
     # Start compression
-    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to)
+    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim)
     print("-" * 50)
     print(f"Image compression process completed.")
     print(f"Files processed: {total_processed}")
