@@ -1,11 +1,22 @@
 import os
 import io
 import re
+import sys
 import argparse
 import tinify
 from PIL import Image, ImageChops
 from dotenv import load_dotenv
 from log_handler import CompressionLogger
+
+# The progress output uses non-ASCII characters, which raise UnicodeEncodeError
+# on the default Windows console codepage (cp1252). Because those prints happen
+# after the file is written, an encoding failure would otherwise be reported as
+# a failed compression.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass  # Not a reconfigurable stream (e.g. redirected/wrapped output).
 
 # Load environment variables from .env file
 load_dotenv()
@@ -113,11 +124,30 @@ def has_alpha(img):
     return img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
 
 
+# A border is only considered "blank" when every channel is at least this
+# bright. Anything darker or more saturated is treated as artwork, not padding.
+WHITE_BORDER_THRESHOLD = 240
+
+
+def is_blank_border_color(color):
+    """
+    Return True when `color` looks like empty padding (near-white) rather than
+    part of the artwork. Guards trim_borders against eating a full-bleed design
+    whose corner pixel happens to be a solid brand color.
+    """
+    if isinstance(color, (int, float)):  # grayscale
+        return color >= WHITE_BORDER_THRESHOLD
+    # Ignore any alpha component; only the color channels decide.
+    return all(channel >= WHITE_BORDER_THRESHOLD for channel in color[:3])
+
+
 def trim_borders(img):
     """
     Remove uniform surrounding whitespace/border from an image so that a logo
     fills its own bounding box. Uses the alpha channel when present, otherwise
-    the top-left corner pixel as the background color.
+    the top-left corner pixel -- but only when that corner is actually blank
+    (near-white). A colored corner means the image bleeds to its edges, so it
+    is left untouched.
 
     Returns a (possibly) cropped copy of the image.
     """
@@ -130,9 +160,14 @@ def trim_borders(img):
         return img
 
     # Trim based on the background color sampled from the top-left corner.
-    bg_color = img.getpixel((0, 0))
-    background = Image.new(img.mode, img.size, bg_color)
-    diff = ImageChops.difference(img.convert(background.mode), background)
+    rgb = img.convert('RGB')
+    bg_color = rgb.getpixel((0, 0))
+    if not is_blank_border_color(bg_color):
+        # Full-bleed artwork: cropping here would delete real content.
+        return img
+
+    background = Image.new('RGB', img.size, bg_color)
+    diff = ImageChops.difference(rgb, background)
     bbox = diff.getbbox()
     if bbox:
         return img.crop(bbox)
@@ -212,9 +247,16 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         # which can differ from the extension in rare cases.
         img_format = img.format
 
+        # An image that already matches the requested dimensions is left
+        # geometrically untouched -- no trim, no resize, no padding.
+        already_target_size = bool(target_dimensions) and img.size == tuple(target_dimensions)
+        if already_target_size:
+            print(f"  Already {img.size[0]}x{img.size[1]}; skipping trim/resize")
+            target_dimensions = None
+
         # Trim surrounding whitespace/border so the subject fills its own
         # bounding box before any aspect-preserving resize.
-        if trim:
+        if trim and not already_target_size:
             img = trim_borders(img)
 
         # Override format if conversion requested
