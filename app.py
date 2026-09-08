@@ -218,12 +218,34 @@ def fit_with_padding(img, target_dimensions, max_upscale=2.0):
     return canvas
 
 
-def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True):
+def scale_to_max_width(img, max_width):
+    """
+    Scale an image down to max_width if it's wider than that, preserving aspect
+    ratio. Unlike fit_with_padding, this never pads onto a fixed canvas and
+    never upscales -- an image already at or under max_width is returned as-is.
+
+    Args:
+        img: The source Pillow image.
+        max_width: The widest the image is allowed to be, in pixels.
+
+    Returns: The original image, or a proportionally resized copy.
+    """
+    w, h = img.size
+    if w <= max_width:
+        return img
+
+    scale = max_width / w
+    new_w = max_width
+    new_h = max(1, round(h * scale))
+    return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+
+def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None):
     """
     Open the image with Pillow, optionally resize based on target dimensions,
     do (mostly) lossless compression in memory, and return the resulting bytes.
     This helps reduce file size before sending to Tinify.
-    
+
     Args:
         src_path: Path to the source image
         target_dimensions: Optional tuple (width, height) to resize image to
@@ -231,6 +253,9 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
         max_upscale: Maximum upscale factor when resizing (2.0 = never more than 2x)
         trim: When True, trim uniform borders/whitespace before resizing
+        max_width: Optional cap in pixels; used only when target_dimensions is
+            not set (an exact target always wins). Scales down proportionally,
+            never pads, never upscales.
     """
     # Map of common format names to Pillow format strings
     FORMAT_MAP = {
@@ -274,6 +299,16 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
             img = fit_with_padding(img, target_dimensions, max_upscale=max_upscale)
             print(f"  Resized to fit {target_width}x{target_height} "
                   f"(aspect preserved, max upscale {max_upscale}x)")
+        elif max_width:
+            # No exact target for this file -- fall back to a proportional
+            # width cap instead of leaving the image at its original size.
+            before_w = img.size[0]
+            img = scale_to_max_width(img, max_width)
+            if img.size[0] != before_w:
+                print(f"  Scaled down to max width {max_width}px "
+                      f"({before_w}px -> {img.size[0]}px, aspect preserved, no upscale)")
+            else:
+                print(f"  Already <= {max_width}px wide; left untouched")
         
         # Set DPI if specified
         if target_dpi:
@@ -356,17 +391,19 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         # Get the compressed bytes
         return buffer.getvalue()
 
-def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True):
+def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None):
     """
     Recursively find and compress images from input_folder,
     then save them to output_folder, preserving subdirectories.
-    
+
     Args:
         input_folder: Path to input folder containing images
         output_folder: Path to output folder for compressed images
         target_size: Optional tuple (width, height) to resize all images to
         target_dpi: Optional DPI value to set for all images
         convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
+        max_width: Optional proportional width cap applied to files that don't
+            resolve an exact target_dimensions (see lossless_compress_in_memory)
     """
     total_processed = 0
     total_successful = 0
@@ -424,7 +461,7 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                         print(f"  Target dimensions: {target_dimensions[0]}x{target_dimensions[1]} (from {dimension_source})")
                     
                     # 1) First do a lossless in-memory compression (with optional resizing, DPI, and format conversion)
-                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to, max_upscale, trim)
+                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to, max_upscale, trim, max_width)
 
                     # 2) Then pass that data to Tinify
                     source = tinify.from_buffer(precompressed_data)
@@ -507,6 +544,7 @@ def main():
     parser.add_argument('--convert-to', '-c', choices=['png', 'jpg', 'jpeg', 'webp', 'gif'], help='Convert images to target format (e.g., png, jpg, webp)')
     parser.add_argument('--width', '-w', type=int, help='Target width in pixels')
     parser.add_argument('--height', type=int, help='Target height in pixels')
+    parser.add_argument('--max-width', '-mw', type=int, help='Scale images down to this width if wider, preserving aspect ratio (no padding, never upscales). Only applies to files that do not resolve an exact --size/--width+--height, subfolder, or filename target, which always take priority')
     parser.add_argument('--max-upscale', type=float, default=2.0, help='Maximum upscale factor when resizing (default: 2.0; 1.0 = never enlarge)')
     parser.add_argument('--no-trim', dest='trim', action='store_false', help='Disable trimming of surrounding whitespace/border before resizing')
     
@@ -549,6 +587,9 @@ def main():
     else:
         print("Target size: Auto-detect from subfolders/filenames")
     print(f"Resize mode: fit + center-pad (aspect preserved), max upscale {args.max_upscale}x")
+    if args.max_width:
+        print(f"Max width fallback: {args.max_width}px (proportional, no padding, no upscale; "
+              f"applies only where no exact size is resolved above)")
     print(f"Trim borders: {'enabled' if args.trim else 'disabled'}")
     if target_dpi:
         print(f"Target DPI: {target_dpi}")
@@ -561,7 +602,7 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
     
     # Start compression
-    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim)
+    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim, args.max_width)
     print("-" * 50)
     print(f"Image compression process completed.")
     print(f"Files processed: {total_processed}")
