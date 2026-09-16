@@ -463,9 +463,16 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                     # 1) First do a lossless in-memory compression (with optional resizing, DPI, and format conversion)
                     precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to, max_upscale, trim, max_width)
 
-                    # 2) Then pass that data to Tinify
-                    source = tinify.from_buffer(precompressed_data)
-                    source.to_file(dest_path)
+                    # 2) Then pass that data to Tinify -- except GIFs, which the
+                    # Tinify API does not accept (it only supports PNG/JPEG/WebP).
+                    # For GIF output, Pillow's own optimization above is the final step.
+                    is_gif_output = convert_to.lower() == 'gif' if convert_to else src_path.lower().endswith('.gif')
+                    if is_gif_output:
+                        with open(dest_path, 'wb') as f:
+                            f.write(precompressed_data)
+                    else:
+                        source = tinify.from_buffer(precompressed_data)
+                        source.to_file(dest_path)
                     
                     # Get compressed file size
                     compressed_size = os.path.getsize(dest_path)
