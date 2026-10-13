@@ -18,10 +18,13 @@ for filename in os.listdir(INPUT_DIR):
         output_path = os.path.join(OUTPUT_DIR, output_filename)
 
         print(f"Processing: {input_path}")
+        # Only white touching the image edge becomes transparent (the 1px white
+        # border links all edges); white inside the artwork stays opaque.
         cmd = [
             IMAGEMAGICK_PATH,
             input_path,
-            '-transparent', 'white',
+            '-bordercolor', 'white', '-border', '1', '-alpha', 'set',
+            '-fill', 'none', '-fuzz', '3%', '-floodfill', '+0+0', 'white', '-shave', '1x1',
             '-trim', '+repage',
             output_path
         ]
