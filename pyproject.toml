@@ -8,3 +8,6 @@ dependencies = [
     "Python-dotenv",
     "tinify",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

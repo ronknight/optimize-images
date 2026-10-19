@@ -68,7 +68,7 @@ The **Optimize Images** project is a Python-based CLI tool for compressing image
 ### Main Compression Tool
 Run the script to compress your images:
 ```bash
-python optimize_images.py
+python app.py
 ```
 
 #### CLI Workflow:
@@ -82,6 +82,71 @@ python optimize_images.py
    Enter the output folder path:
    ```
 4. The script will then compress all valid images and save the compressed versions to the specified output folder, preserving the folder structure.
+
+#### Automatic banner formats for Marketing Command Center
+
+Use `--convert-to auto` for a batch containing both landing-page and email
+banners. Marketing Command Center uses `wj-pages` for Landing Pages and
+`jinja-generator` for Campaigns (email). The converter uses these local business
+rules; it does not query the tools or inspect live campaign settings.
+
+| Asset destination or naming | Output |
+| --- | --- |
+| Email label (`email`, `emails`, `e-mail`, `mailchimp`, `newsletter`) or `E` immediately after dimensions, e.g. `900x525E` | PNG |
+| Landing-page `L` suffix, e.g. `900x525L`, or a web label (`web`, `website`, `landing-page`, `desktop`, `tablet`, `mobile`) | WebP |
+| Unmarked `900x525`, `1320x350`, or `520x400` hero/department/shared email slot | PNG |
+| Unmarked `1600x500` or `1920x500` desktop banner | WebP |
+| Other or unknown destination | PNG |
+| GIF input | GIF, using the existing local animation pipeline |
+
+Labels can appear in filenames or folders and are case-insensitive. Email
+markers take precedence if both email and web markers appear. Explicit labels
+and suffixes take precedence over dimensions: `900x525L` is WebP even though an
+unmarked `900x525` is PNG. The filename/folder dimensions determine the slot;
+actual image dimensions are the fallback. A CLI resize override does not change
+the destination. Dates in a filename do not hide its dimensions.
+
+For the October 16 Black Friday batch, all three originals end in `L`, so all
+three outputs are WebP. Use this command (change `webp` to `auto`):
+
+```powershell
+python D:\PycharmProjects\optimize-images\app.py --max-upscale 2.0 --dpi 72 --convert-to auto D:\PycharmProjects\optimize-images\data\2026-10-16\original D:\PycharmProjects\optimize-images\data\2026-10-16\optimized
+```
+
+Append `--dry-run` to preview each output path, target dimensions, and format
+reason without writing images or calling TinyPNG. A dry run needs no API key;
+the normal CSV log initialization still occurs. Existing output files with
+other names or extensions are retained.
+
+Explicit `--convert-to webp` still forces every image to WebP, and
+`--convert-to png` forces PNG. Omitting `--convert-to` retains the source format.
+Resize, upscaling, DPI, and border-trimming options work as before.
+
+```mermaid
+flowchart TD
+    A[Input image] --> B{Requested format}
+    B -->|Explicit format| C[Use requested format]
+    B -->|Omitted| D[Keep source format]
+    B -->|Auto| E{GIF input?}
+    E -->|Yes| F[Keep GIF]
+    E -->|No| G{Email marker?}
+    G -->|Yes| H[PNG]
+    G -->|No| I{Web marker?}
+    I -->|Yes| J[WebP]
+    I -->|No| K{Banner slot}
+    K -->|Email or shared| H
+    K -->|Desktop web| J
+    K -->|Unknown| H
+    C --> L[Preview or compress]
+    D --> L
+    F --> L
+    H --> L
+    J --> L
+```
+
+Run the offline regression suite with `python -m pytest -q`. Tests cover the
+format rules, real Pillow output bytes, subdirectories, GIF frames, explicit
+overrides, and a key-free dry run; TinyPNG calls are replaced locally.
 
 ### WebP Converter
 Convert images to WebP format with intelligent size detection:

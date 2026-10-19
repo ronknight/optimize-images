@@ -24,9 +24,6 @@ load_dotenv()
 # Retrieve the TinyPNG API key from environment variables
 TINIFY_API_KEY = os.getenv("TINIFY_API_KEY")
 
-if not TINIFY_API_KEY:
-    raise ValueError("Error: TINIFY_API_KEY is not set in the environment variables.")
-
 # Set the API key for tinify
 tinify.key = TINIFY_API_KEY
 
@@ -52,8 +49,11 @@ def parse_dimensions_from_text(text):
     
     # Exclude date patterns (YYYY-MM-DD, MM-DD, YYYYMMDD, etc.)
     # This prevents "2026-05-08" or "05-08" from being parsed as dimensions
-    if re.search(r'\d{4}[-_]\d{2}[-_]\d{2}|\d{2}[-_]\d{2}(?:[-_]\d{2,4})?', text_clean):
-        return None
+    # Ignore the date itself, not dimensions elsewhere in the same filename.
+    text_clean = re.sub(
+        r'(?<!\d)(?:\d{4}[-_]\d{2}[-_]\d{2}|\d{2}[-_]\d{2}(?:[-_]\d{2,4})?)(?!\d)',
+        '', text_clean,
+    )
     
     # Pattern to match dimension formats: WIDTHxHEIGHT or WIDTH-HEIGHT or WIDTH_HEIGHT
     # Supports delimiters: x, X, -, _, within various contexts
@@ -118,6 +118,48 @@ def is_image_file(filename):
     valid_extensions = [".png", ".jpg", ".jpeg", ".webp", ".gif"]
     ext = os.path.splitext(filename)[1].lower()
     return ext in valid_extensions
+
+def select_output_format(src_path: str | os.PathLike[str]) -> tuple[str, str]:
+    """Choose a banner format by destination, returning format and reason.
+
+    MCC's Campaigns tool uses PNG email heroes and department/showcase banners;
+    its Landing Pages tool uses browser assets. A 900x525 banner can serve either
+    destination, so explicit email/web labels and E/L suffixes outrank size.
+    Unknown destinations use PNG; GIFs retain their existing animation pipeline.
+    """
+    path = os.fspath(src_path).replace('\\', '/')
+    filename = path.rsplit('/', 1)[-1]
+    stem, extension = os.path.splitext(filename)
+    if extension.lower() == '.gif':
+        return 'gif', 'GIF retained (animation-compatible output)'
+
+    email_label = re.search(
+        r'(?:^|[/_.\s-])(?:emails?|e-mails?|mailchimp|newsletters?)(?=$|[/_.\s-])',
+        path, re.IGNORECASE,
+    )
+    if email_label or re.search(r'\d{3,5}x\d{3,5}E(?:$|[_.\s-])', stem, re.IGNORECASE):
+        return 'png', 'email destination (label or E suffix)'
+
+    web_label = re.search(
+        r'(?:^|[/_.\s-])(?:web|website|landing(?:[\s_-]*pages?)?|desktop|tablet|mobile)(?=$|[/_.\s-])',
+        path, re.IGNORECASE,
+    )
+    if web_label or re.search(r'\d{3,5}x\d{3,5}L(?:$|[_.\s-])', stem, re.IGNORECASE):
+        return 'webp', 'landing-page destination (label or L suffix)'
+
+    # Classify the asset's intended slot, not a CLI resize override.
+    dimensions = (parse_dimensions_from_filename(filename)
+                  or parse_dimensions_from_folder_path(os.path.dirname(path)))
+    if dimensions is None:
+        with Image.open(src_path) as image:
+            dimensions = image.size
+
+    if dimensions in {(900, 525), (1320, 350), (520, 400)}:
+        return 'png', f'{dimensions[0]}x{dimensions[1]} email/shared banner slot'
+    if dimensions in {(1600, 500), (1920, 500)}:
+        return 'webp', f'{dimensions[0]}x{dimensions[1]} desktop web banner slot'
+    return 'png', 'destination unknown; PNG compatibility fallback'
+
 
 def has_alpha(img):
     """Return True if the image carries transparency information."""
@@ -391,7 +433,7 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         # Get the compressed bytes
         return buffer.getvalue()
 
-def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None):
+def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None, dry_run=False):
     """
     Recursively find and compress images from input_folder,
     then save them to output_folder, preserving subdirectories.
@@ -401,9 +443,11 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
         output_folder: Path to output folder for compressed images
         target_size: Optional tuple (width, height) to resize all images to
         target_dpi: Optional DPI value to set for all images
-        convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
+        convert_to: Optional fixed format, or 'auto' for destination-based selection
         max_width: Optional proportional width cap applied to files that don't
             resolve an exact target_dimensions (see lossless_compress_in_memory)
+        dry_run: Preview output paths and formats without writing images or
+            calling Tinify
     """
     total_processed = 0
     total_successful = 0
@@ -417,22 +461,24 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                 # Calculate the relative path to preserve the folder structure
                 relative_path = os.path.relpath(src_path, input_folder)
 
-                # Create the corresponding subfolder under output_folder
-                dest_path = os.path.join(output_folder, relative_path)
-                
-                # Change file extension if converting format
-                if convert_to:
-                    ext_map = {'png': '.png', 'jpg': '.jpg', 'jpeg': '.jpg', 'webp': '.webp', 'gif': '.gif'}
-                    new_ext = ext_map.get(convert_to.lower(), '.' + convert_to.lower())
-                    dest_path = os.path.splitext(dest_path)[0] + new_ext
-                
-                dest_dir = os.path.dirname(dest_path)
-                os.makedirs(dest_dir, exist_ok=True)
-
-                print(f"Compressing: {src_path} -> {dest_path}")
                 total_processed += 1
                 
                 try:
+                    output_format = convert_to
+                    format_reason = None
+                    if convert_to and convert_to.lower() == 'auto':
+                        output_format, format_reason = select_output_format(src_path)
+
+                    dest_path = os.path.join(output_folder, relative_path)
+                    if output_format:
+                        ext_map = {'png': '.png', 'jpg': '.jpg', 'jpeg': '.jpg', 'webp': '.webp', 'gif': '.gif'}
+                        new_ext = ext_map.get(output_format.lower(), '.' + output_format.lower())
+                        dest_path = os.path.splitext(dest_path)[0] + new_ext
+
+                    print(f"{'Would compress' if dry_run else 'Compressing'}: {src_path} -> {dest_path}")
+                    if format_reason:
+                        print(f"  Auto format: {output_format.upper()} -- {format_reason}")
+
                     # Get original file size
                     original_size = os.path.getsize(src_path)
                     
@@ -459,14 +505,20 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                     
                     if target_dimensions:
                         print(f"  Target dimensions: {target_dimensions[0]}x{target_dimensions[1]} (from {dimension_source})")
+
+                    if dry_run:
+                        total_successful += 1
+                        continue
+
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                     
                     # 1) First do a lossless in-memory compression (with optional resizing, DPI, and format conversion)
-                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, convert_to, max_upscale, trim, max_width)
+                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, output_format, max_upscale, trim, max_width)
 
                     # 2) Then pass that data to Tinify -- except GIFs, which the
                     # Tinify API does not accept (it only supports PNG/JPEG/WebP).
                     # For GIF output, Pillow's own optimization above is the final step.
-                    is_gif_output = convert_to.lower() == 'gif' if convert_to else src_path.lower().endswith('.gif')
+                    is_gif_output = output_format.lower() == 'gif' if output_format else src_path.lower().endswith('.gif')
                     if is_gif_output:
                         with open(dest_path, 'wb') as f:
                             f.write(precompressed_data)
@@ -548,7 +600,8 @@ def main():
     parser.add_argument('output_folder', nargs='?', help='Output folder for compressed images')
     parser.add_argument('--size', '-s', help='Target size in format WIDTHxHEIGHT (e.g., 800x600)')
     parser.add_argument('--dpi', '-d', type=int, help='Target DPI for images (e.g., 72, 300)')
-    parser.add_argument('--convert-to', '-c', choices=['png', 'jpg', 'jpeg', 'webp', 'gif'], help='Convert images to target format (e.g., png, jpg, webp)')
+    parser.add_argument('--convert-to', '-c', choices=['auto', 'png', 'jpg', 'jpeg', 'webp', 'gif'], help='Target format; auto chooses PNG for email/shared/unknown banners and WebP for labeled web banners. Explicit formats force every image to that format; omitted keeps the source format')
+    parser.add_argument('--dry-run', action='store_true', help='Preview output names, sizes, and auto-format reasons without writing images or calling Tinify (no API key required)')
     parser.add_argument('--width', '-w', type=int, help='Target width in pixels')
     parser.add_argument('--height', type=int, help='Target height in pixels')
     parser.add_argument('--max-width', '-mw', type=int, help='Scale images down to this width if wider, preserving aspect ratio (no padding, never upscales). Only applies to files that do not resolve an exact --size/--width+--height, subfolder, or filename target, which always take priority')
@@ -556,6 +609,9 @@ def main():
     parser.add_argument('--no-trim', dest='trim', action='store_false', help='Disable trimming of surrounding whitespace/border before resizing')
     
     args = parser.parse_args()
+
+    if not args.dry_run and not TINIFY_API_KEY:
+        parser.error('TINIFY_API_KEY is not set in the environment variables.')
     
     # Get input and output folders
     if args.input_folder and args.output_folder:
@@ -606,14 +662,15 @@ def main():
     print("-" * 50)
     
     # Create output folder if it doesn't exist
-    os.makedirs(output_folder, exist_ok=True)
+    if not args.dry_run:
+        os.makedirs(output_folder, exist_ok=True)
     
     # Start compression
-    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim, args.max_width)
+    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim, args.max_width, args.dry_run)
     print("-" * 50)
-    print(f"Image compression process completed.")
+    print('Dry run completed (no images written or Tinify calls).' if args.dry_run else 'Image compression process completed.')
     print(f"Files processed: {total_processed}")
-    print(f"Successfully compressed: {total_successful}")
+    print(f"{'Planned images' if args.dry_run else 'Successfully compressed'}: {total_successful}")
     if total_processed > 0:
         success_rate = (total_successful / total_processed) * 100
         print(f"Success rate: {success_rate:.1f}%")
