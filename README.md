@@ -83,6 +83,18 @@ python app.py
    ```
 4. The script will then compress all valid images and save the compressed versions to the specified output folder, preserving the folder structure.
 
+#### Resize by width only
+
+`--width` on its own scales every image proportionally to that width (height
+follows the aspect ratio, no padding). It overrides subfolder and filename
+sizes, and upscaling is capped by `--max-upscale`, so a small source can come
+out narrower. `--width` with `--height` (or `--size WxH`) still fits and pads to
+an exact canvas.
+
+```powershell
+python D:\PycharmProjects\optimize-images\app.py --max-upscale 2.0 --dpi 72 --width 500 D:\PycharmProjects\optimize-images\data\2026-10-20\original D:\PycharmProjects\optimize-images\data\2026-10-20\optimized
+```
+
 #### Automatic banner formats for Marketing Command Center
 
 Use `--convert-to auto` for a batch containing both landing-page and email

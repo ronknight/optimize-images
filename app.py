@@ -282,7 +282,31 @@ def scale_to_max_width(img, max_width):
     return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
 
-def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None):
+def scale_to_width(img, width, max_upscale=2.0):
+    """
+    Scale an image proportionally to exactly `width` pixels wide (height follows
+    the aspect ratio). No padding. Upscaling is capped at max_upscale, so a
+    small source may end up narrower than `width`.
+
+    Args:
+        img: PIL Image object
+        width: Desired output width in pixels.
+        max_upscale: Maximum upscale factor (None = uncapped).
+
+    Returns: The original image, or a proportionally resized copy.
+    """
+    w, h = img.size
+    scale = width / w
+    if max_upscale is not None:
+        scale = min(scale, max_upscale)
+    new_w = max(1, round(w * scale))
+    new_h = max(1, round(h * scale))
+    if (new_w, new_h) == (w, h):
+        return img
+    return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+
+def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None, target_width=None):
     """
     Open the image with Pillow, optionally resize based on target dimensions,
     do (mostly) lossless compression in memory, and return the resulting bytes.
@@ -295,6 +319,9 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         convert_to: Optional target format string (e.g., 'png', 'jpeg', 'webp')
         max_upscale: Maximum upscale factor when resizing (2.0 = never more than 2x)
         trim: When True, trim uniform borders/whitespace before resizing
+        target_width: Optional exact width (from --width alone); used only when
+            target_dimensions is unset. Proportional, no padding, upscale
+            capped by max_upscale.
         max_width: Optional cap in pixels; used only when target_dimensions is
             not set (an exact target always wins). Scales down proportionally,
             never pads, never upscales.
@@ -341,6 +368,13 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
             img = fit_with_padding(img, target_dimensions, max_upscale=max_upscale)
             print(f"  Resized to fit {target_width}x{target_height} "
                   f"(aspect preserved, max upscale {max_upscale}x)")
+        elif target_width:
+            # --width without --height: proportional scale to that width.
+            before = img.size
+            img = scale_to_width(img, target_width, max_upscale=max_upscale)
+            print(f"  Scaled to width {target_width}px "
+                  f"({before[0]}x{before[1]} -> {img.size[0]}x{img.size[1]}, "
+                  f"aspect preserved, max upscale {max_upscale}x)")
         elif max_width:
             # No exact target for this file -- fall back to a proportional
             # width cap instead of leaving the image at its original size.
@@ -433,7 +467,7 @@ def lossless_compress_in_memory(src_path, target_dimensions=None, target_dpi=Non
         # Get the compressed bytes
         return buffer.getvalue()
 
-def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None, dry_run=False):
+def compress_images(input_folder, output_folder, target_size=None, target_dpi=None, convert_to=None, max_upscale=2.0, trim=True, max_width=None, dry_run=False, target_width=None):
     """
     Recursively find and compress images from input_folder,
     then save them to output_folder, preserving subdirectories.
@@ -448,6 +482,9 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
             resolve an exact target_dimensions (see lossless_compress_in_memory)
         dry_run: Preview output paths and formats without writing images or
             calling Tinify
+        target_width: Optional command-line width (--width without --height);
+            scales every image proportionally to it, overriding subfolder and
+            filename dimensions
     """
     total_processed = 0
     total_successful = 0
@@ -489,14 +526,16 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                     target_dimensions = target_size
                     dimension_source = "command line"
                     
-                    if not target_dimensions:
+                    if not target_dimensions and target_width:
+                        print(f"  Target width: {target_width}px (from command line, proportional)")
+                    elif not target_dimensions:
                         # Try to get dimensions from folder path
                         folder_dimensions = parse_dimensions_from_folder_path(root)
                         if folder_dimensions:
                             target_dimensions = folder_dimensions
                             dimension_source = "subfolder"
                     
-                    if not target_dimensions:
+                    if not target_dimensions and not target_width:
                         # Fallback to filename parsing
                         filename_dimensions = parse_dimensions_from_filename(file)
                         if filename_dimensions:
@@ -513,7 +552,7 @@ def compress_images(input_folder, output_folder, target_size=None, target_dpi=No
                     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                     
                     # 1) First do a lossless in-memory compression (with optional resizing, DPI, and format conversion)
-                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, output_format, max_upscale, trim, max_width)
+                    precompressed_data = lossless_compress_in_memory(src_path, target_dimensions, target_dpi, output_format, max_upscale, trim, max_width, target_width)
 
                     # 2) Then pass that data to Tinify -- except GIFs, which the
                     # Tinify API does not accept (it only supports PNG/JPEG/WebP).
@@ -602,7 +641,7 @@ def main():
     parser.add_argument('--dpi', '-d', type=int, help='Target DPI for images (e.g., 72, 300)')
     parser.add_argument('--convert-to', '-c', choices=['auto', 'png', 'jpg', 'jpeg', 'webp', 'gif'], help='Target format; auto chooses PNG for email/shared/unknown banners and WebP for labeled web banners. Explicit formats force every image to that format; omitted keeps the source format')
     parser.add_argument('--dry-run', action='store_true', help='Preview output names, sizes, and auto-format reasons without writing images or calling Tinify (no API key required)')
-    parser.add_argument('--width', '-w', type=int, help='Target width in pixels')
+    parser.add_argument('--width', '-w', type=int, help='Target width in pixels. With --height: exact fit + pad. Alone: scale proportionally to this width (upscale capped by --max-upscale), overriding subfolder/filename sizes')
     parser.add_argument('--height', type=int, help='Target height in pixels')
     parser.add_argument('--max-width', '-mw', type=int, help='Scale images down to this width if wider, preserving aspect ratio (no padding, never upscales). Only applies to files that do not resolve an exact --size/--width+--height, subfolder, or filename target, which always take priority')
     parser.add_argument('--max-upscale', type=float, default=2.0, help='Maximum upscale factor when resizing (default: 2.0; 1.0 = never enlarge)')
@@ -629,12 +668,15 @@ def main():
     
     # Parse size arguments
     target_size = None
+    target_width = None
     if args.size:
         target_size = parse_size_argument(args.size)
     elif args.width and args.height:
         target_size = (args.width, args.height)
-    elif args.width or args.height:
-        print("Warning: Both --width and --height must be specified together. Ignoring size settings.")
+    elif args.width:
+        target_width = args.width
+    elif args.height:
+        print("Warning: --height requires --width. Ignoring --height.")
     
     # Validate DPI
     target_dpi = args.dpi
@@ -647,6 +689,8 @@ def main():
     print(f"Output folder: {output_folder}")
     if target_size:
         print(f"Target size: {target_size[0]}x{target_size[1]} (command line override)")
+    elif target_width:
+        print(f"Target width: {target_width}px (command line override, proportional height)")
     else:
         print("Target size: Auto-detect from subfolders/filenames")
     print(f"Resize mode: fit + center-pad (aspect preserved), max upscale {args.max_upscale}x")
@@ -666,7 +710,7 @@ def main():
         os.makedirs(output_folder, exist_ok=True)
     
     # Start compression
-    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim, args.max_width, args.dry_run)
+    total_processed, total_successful = compress_images(input_folder, output_folder, target_size, target_dpi, args.convert_to, args.max_upscale, args.trim, args.max_width, args.dry_run, target_width)
     print("-" * 50)
     print('Dry run completed (no images written or Tinify calls).' if args.dry_run else 'Image compression process completed.')
     print(f"Files processed: {total_processed}")

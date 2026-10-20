@@ -157,3 +157,35 @@ def test_dates_do_not_hide_dimensions() -> None:
 def test_missing_unlabeled_image_raises_specific_error() -> None:
     with pytest.raises(FileNotFoundError):
         app.select_output_format('missing-unlabeled-image.png')
+
+
+def test_width_alone_scales_proportionally_over_filename_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / 'original'
+    source.mkdir()
+    Image.new('RGB', (1000, 400), 'blue').save(source / 'wide-900x525.png')
+    Image.new('RGB', (200, 100), 'red').save(source / 'small.png')
+    install_local_tinify(monkeypatch)
+    output = tmp_path / 'optimized'
+
+    assert app.compress_images(source, output, trim=False, max_upscale=2.0,
+                               target_width=500) == (2, 2)
+    with Image.open(output / 'wide-900x525.png') as wide:
+        assert wide.size == (500, 200)
+    with Image.open(output / 'small.png') as small:
+        assert small.size == (400, 200)  # 2.5x wanted, capped at 2x
+
+
+def test_cli_width_without_height_is_not_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+) -> None:
+    source = tmp_path / 'original'
+    source.mkdir()
+    Image.new('RGB', (1000, 400), 'blue').save(source / 'banner.png')
+    monkeypatch.setattr(sys, 'argv', ['app.py', '--dry-run', '--width', '500',
+                                      str(source), str(tmp_path / 'out')])
+    app.main()
+    out = capsys.readouterr().out
+    assert 'Ignoring size settings' not in out
+    assert 'Target width: 500px' in out

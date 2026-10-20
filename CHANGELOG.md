@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+#### 2026-10-20 - Honor --width without --height
+
+- `app.py`: `--width` alone was dropped with "Both --width and --height must be
+  specified together. Ignoring size settings." It now scales each image
+  proportionally to that width (new `scale_to_width`, upscale capped by
+  `--max-upscale`), overriding subfolder/filename sizes. `--height` alone still
+  warns and is ignored.
+- `tests/test_format_selection.py`: cover width-only scaling, the upscale cap,
+  and the CLI no longer ignoring `--width`.
+- `README.md`: document width-only resizing.
+
 ### Added
 
 #### 2026-10-16 - Select banner formats by Marketing Command Center destination
