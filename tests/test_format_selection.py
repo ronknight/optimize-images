@@ -34,6 +34,10 @@ import app  # noqa: E402
     ('tablet/banner-900x525.png', 'webp'),
     ('web/banner-900x525E.png', 'png'),
     (r'C:\banners\email\banner-1600x500.png', 'png'),
+    ('Black-Friday-940x788SM.png', 'png'),
+    ('Black-Friday-940x788sm.jpg', 'png'),
+    ('web/Black-Friday-1600x500SM.png', 'png'),
+    ('social-media/banner-1600x500.png', 'png'),
     ('animated.gif', 'gif'),
 ])
 def test_format_follows_destination_before_dimensions(name: str, expected: str) -> None:

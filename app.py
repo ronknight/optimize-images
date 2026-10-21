@@ -125,6 +125,7 @@ def select_output_format(src_path: str | os.PathLike[str]) -> tuple[str, str]:
     MCC's Campaigns tool uses PNG email heroes and department/showcase banners;
     its Landing Pages tool uses browser assets. A 900x525 banner can serve either
     destination, so explicit email/web labels and E/L suffixes outrank size.
+    Social-media assets (SM suffix or social label) always stay PNG.
     Unknown destinations use PNG; GIFs retain their existing animation pipeline.
     """
     path = os.fspath(src_path).replace('\\', '/')
@@ -139,6 +140,14 @@ def select_output_format(src_path: str | os.PathLike[str]) -> tuple[str, str]:
     )
     if email_label or re.search(r'\d{3,5}x\d{3,5}E(?:$|[_.\s-])', stem, re.IGNORECASE):
         return 'png', 'email destination (label or E suffix)'
+
+    # Social-media uploads stay PNG; SM suffix or label outranks web markers.
+    social_label = re.search(
+        r'(?:^|[/_.\s-])(?:social(?:[\s_-]*media)?)(?=$|[/_.\s-])',
+        path, re.IGNORECASE,
+    )
+    if social_label or re.search(r'\d{3,5}x\d{3,5}SM(?:$|[_.\s-])', stem, re.IGNORECASE):
+        return 'png', 'social-media destination (label or SM suffix)'
 
     web_label = re.search(
         r'(?:^|[/_.\s-])(?:web|website|landing(?:[\s_-]*pages?)?|desktop|tablet|mobile)(?=$|[/_.\s-])',

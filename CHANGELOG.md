@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+#### 2026-10-21 - Keep social-media (SM) images as PNG in auto mode
+
+- `app.py`: `select_output_format` returns PNG for an `SM` suffix right after
+  dimensions (e.g. `940x788SM`) or a `social`/`social-media` label, ranked with
+  email markers so a web label or desktop slot cannot turn it into WebP.
+- `tests/test_format_selection.py`: cover SM suffix, lowercase, web-folder
+  precedence, and the folder label.
+- `README.md`: add the SM row to the format table and update the flowchart.
+
 ### Fixed
 
 #### 2026-10-20 - Honor --width without --height

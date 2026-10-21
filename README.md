@@ -105,6 +105,7 @@ rules; it does not query the tools or inspect live campaign settings.
 | Asset destination or naming | Output |
 | --- | --- |
 | Email label (`email`, `emails`, `e-mail`, `mailchimp`, `newsletter`) or `E` immediately after dimensions, e.g. `900x525E` | PNG |
+| Social-media `SM` immediately after dimensions, e.g. `940x788SM`, or a `social`/`social-media` label | PNG |
 | Landing-page `L` suffix, e.g. `900x525L`, or a web label (`web`, `website`, `landing-page`, `desktop`, `tablet`, `mobile`) | WebP |
 | Unmarked `900x525`, `1320x350`, or `520x400` hero/department/shared email slot | PNG |
 | Unmarked `1600x500` or `1920x500` desktop banner | WebP |
@@ -112,7 +113,7 @@ rules; it does not query the tools or inspect live campaign settings.
 | GIF input | GIF, using the existing local animation pipeline |
 
 Labels can appear in filenames or folders and are case-insensitive. Email
-markers take precedence if both email and web markers appear. Explicit labels
+and social-media markers take precedence if a web marker also appears. Explicit labels
 and suffixes take precedence over dimensions: `900x525L` is WebP even though an
 unmarked `900x525` is PNG. The filename/folder dimensions determine the slot;
 actual image dimensions are the fallback. A CLI resize override does not change
@@ -141,7 +142,7 @@ flowchart TD
     B -->|Omitted| D[Keep source format]
     B -->|Auto| E{GIF input?}
     E -->|Yes| F[Keep GIF]
-    E -->|No| G{Email marker?}
+    E -->|No| G{Email or SM marker?}
     G -->|Yes| H[PNG]
     G -->|No| I{Web marker?}
     I -->|Yes| J[WebP]
